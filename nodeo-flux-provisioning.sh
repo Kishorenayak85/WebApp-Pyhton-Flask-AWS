@@ -34,6 +34,7 @@ function provisioning_start() {
     provisioning_get_models "/workspace/ComfyUI/models/clip" "${CLIP_MODELS[@]}"
     provisioning_get_models "/workspace/ComfyUI/models/ipadapter" "${IPADAPTER_MODELS[@]}"
     provisioning_get_renamed_model "/workspace/ComfyUI/models/clip_vision" "$CLIP_VISION_URL" "$CLIP_VISION_FILENAME"
+    provisioning_verify
     provisioning_print_end
 }
 
@@ -53,9 +54,7 @@ function provisioning_get_models() {
 
 # For files that need renaming on save (source filename != desired filename)
 function provisioning_get_renamed_model() {
-    dir="$1"
-    url="$2"
-    filename="$3"
+    dir="$1"; url="$2"; filename="$3"
     mkdir -p "$dir"
     dest_path="${dir}/${filename}"
     if [[ -f "$dest_path" ]]; then
@@ -63,7 +62,12 @@ function provisioning_get_renamed_model() {
         return 0
     fi
     printf "Downloading (renamed): %s -> %s\n" "${url}" "${dest_path}"
-    wget -q --show-progress -e dotbytes="4M" -O "$dest_path" "$url"
+    if [[ -n "$HF_TOKEN" && "$url" == *"huggingface.co"* ]]; then
+        wget -q --header="Authorization: Bearer $HF_TOKEN" \
+             --show-progress -e dotbytes="4M" -O "$dest_path" "$url"
+    else
+        wget -q --show-progress -e dotbytes="4M" -O "$dest_path" "$url"
+    fi
 }
 
 function provisioning_print_header() {
@@ -74,8 +78,37 @@ function provisioning_print_end() {
     printf "\nNodeo provisioning complete: ComfyUI will start now\n\n"
 }
 
+function provisioning_verify() {
+    printf "\n=== Verifying downloads ===\n"
+    local missing=0
+    for f in \
+        "/workspace/ComfyUI/models/unet/flux1-dev.safetensors" \
+        "/workspace/ComfyUI/models/vae/ae.safetensors" \
+        "/workspace/ComfyUI/models/clip/clip_l.safetensors" \
+        "/workspace/ComfyUI/models/clip/t5xxl_fp16.safetensors" \
+        "/workspace/ComfyUI/models/clip_vision/CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+    do
+        if [[ -f "$f" ]]; then
+            printf "  OK      %s (%s)\n" "$f" "$(du -h "$f" | cut -f1)"
+        else
+            printf "  MISSING %s\n" "$f"
+            missing=$((missing+1))
+        fi
+    done
+    if [[ $missing -gt 0 ]]; then
+        printf "\n!!! %s required model(s) MISSING — ComfyUI will fail !!!\n\n" "$missing"
+    else
+        printf "\nAll required models present.\n\n"
+    fi
+}
+
 function provisioning_download() {
-    wget -qnc --content-disposition --show-progress -e dotbytes="4M" -P "$2" "$1"
+    if [[ -n "$HF_TOKEN" && "$1" == *"huggingface.co"* ]]; then
+        wget -qnc --header="Authorization: Bearer $HF_TOKEN" \
+             --content-disposition --show-progress -e dotbytes="4M" -P "$2" "$1"
+    else
+        wget -qnc --content-disposition --show-progress -e dotbytes="4M" -P "$2" "$1"
+    fi
 }
 
 provisioning_start
