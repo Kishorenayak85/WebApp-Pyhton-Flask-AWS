@@ -121,9 +121,18 @@ function provisioning_get_nodes() {
         if [[ -f "$requirements" ]]; then
             printf "  Installing requirements for %s...\n" "$name"
             pip install --no-cache-dir -r "$requirements" || \
-                printf "  !!! pip install failed for %s (node may still load)\n" "$name"
+                printf "  !!! pip install -r failed for %s\n" "$name"
         fi
     done
+
+    # Explicit dependency installs — do NOT rely solely on each node's
+    # requirements.txt. ComfyUI-GGUF imports the `gguf` package at load time;
+    # if it's missing the node IMPORT FAILS and UnetLoaderGGUF is unavailable
+    # (this was the v2 failure: ModuleNotFoundError: No module named 'gguf').
+    printf "  Installing explicit node dependencies (gguf)...\n"
+    pip install --no-cache-dir "gguf>=0.13.0" || \
+        printf "  !!! pip install gguf FAILED — UnetLoaderGGUF will not load\n"
+
     printf "=== Custom nodes done ===\n\n"
 }
 
