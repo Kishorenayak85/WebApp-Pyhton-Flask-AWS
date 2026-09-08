@@ -105,6 +105,19 @@ function provisioning_start() {
 # --- (A) ai-dock native node install: clone + pip install requirements ---
 function provisioning_get_nodes() {
     mkdir -p "$NODES_DIR"
+
+    # CRITICAL: node Python deps must go into ComfyUI's OWN environment, not the
+    # provisioner's. On ai-dock, ComfyUI runs from /venv/main (conda/uv), while a
+    # bare `pip` in the provisioning script targets /opt/instance-tools/.../venv.
+    # v2 failure: gguf installed into the provisioner venv, so ComfyUI (/venv/main)
+    # still raised ModuleNotFoundError. Resolve ComfyUI's python explicitly.
+    local COMFY_PY=""
+    for p in "/venv/main/bin/python" "/opt/environments/python/comfyui/bin/python" "$(command -v python3)"; do
+        if [[ -x "$p" ]]; then COMFY_PY="$p"; break; fi
+    done
+    printf "[provision] Installing node deps with: %s\n" "$COMFY_PY"
+    local PIP=( "$COMFY_PY" -m pip install --no-cache-dir )
+
     printf "\n=== Installing %s custom node(s) into %s ===\n" "${#NODES[@]}" "$NODES_DIR"
     for repo in "${NODES[@]}"; do
         local name
@@ -119,19 +132,25 @@ function provisioning_get_nodes() {
             git clone --recursive "$repo" "$path" || { printf "  !!! CLONE FAILED: %s\n" "$repo"; continue; }
         fi
         if [[ -f "$requirements" ]]; then
-            printf "  Installing requirements for %s...\n" "$name"
-            pip install --no-cache-dir -r "$requirements" || \
+            printf "  Installing requirements for %s into ComfyUI env...\n" "$name"
+            "${PIP[@]}" -r "$requirements" || \
                 printf "  !!! pip install -r failed for %s\n" "$name"
         fi
     done
 
-    # Explicit dependency installs — do NOT rely solely on each node's
-    # requirements.txt. ComfyUI-GGUF imports the `gguf` package at load time;
-    # if it's missing the node IMPORT FAILS and UnetLoaderGGUF is unavailable
-    # (this was the v2 failure: ModuleNotFoundError: No module named 'gguf').
-    printf "  Installing explicit node dependencies (gguf)...\n"
-    pip install --no-cache-dir "gguf>=0.13.0" || \
+    # Explicit belt-and-suspenders: ensure gguf is in ComfyUI's env regardless of
+    # whether the node's requirements.txt resolved. This is the exact package whose
+    # absence made UnetLoaderGGUF fail to import.
+    printf "  Ensuring gguf in ComfyUI env...\n"
+    "${PIP[@]}" "gguf>=0.13.0" || \
         printf "  !!! pip install gguf FAILED — UnetLoaderGGUF will not load\n"
+
+    # Verify import in ComfyUI's actual interpreter so the log tells us the truth.
+    if "$COMFY_PY" -c "import gguf; print('[provision] gguf import OK in', '$COMFY_PY')" 2>/dev/null; then
+        :
+    else
+        printf "  !!! gguf STILL not importable by %s — check env path\n" "$COMFY_PY"
+    fi
 
     printf "=== Custom nodes done ===\n\n"
 }
